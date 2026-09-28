@@ -1,0 +1,50 @@
+name: Build llama.cpp for iOS (Xcode Native Architecture)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: 
+
+jobs:
+  build-llama-ios:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout do llama.cpp
+      uses: actions/checkout@v4
+      with:
+        repository: ggerganov/llama.cpp
+        submodules: recursive
+
+    - name: Configurar ferramentas
+      run: |
+        brew install cmake
+
+    - name: Build do Motor llama.cpp (Padrão Xcode)
+      id: cmake_build
+      run: |
+        sysctl -a
+        mkdir build
+        # Usamos exatamente a sua estrutura de configuração nativa para iOS
+        cmake -B build -G Xcode \
+          -DGGML_METAL_EMBED_LIBRARY=ON \
+          -DLLAMA_OPENSSL=OFF \
+          -DLLAMA_BUILD_APP=OFF \
+          -DLLAMA_BUILD_EXAMPLES=OFF \
+          -DLLAMA_BUILD_TOOLS=OFF \
+          -DLLAMA_BUILD_TESTS=OFF \
+          -DLLAMA_BUILD_SERVER=OFF \
+          -DCMAKE_SYSTEM_NAME=iOS \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+          -DCMAKE_OSX_ARCHITECTURES=arm64 \
+          -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
+          
+        # Compila aproveitando o máximo de CPUs lógicas da máquina virtual
+        cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
+
+    - name: Upload dos Artefatos Estáticos para o Xcode
+      uses: actions/upload-artifact@v4
+      with:
+        name: llama-engine-ios-arm64
+        path: |
+          build/**/*.a
