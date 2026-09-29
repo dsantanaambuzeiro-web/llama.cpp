@@ -46,7 +46,7 @@ jobs:
             -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml \
-            --DBUILD_SHARED_LIBS=OFF
+            -DBUILD_SHARED_LIBS=OFF
 
       - name: Show configured targets
         run: |
