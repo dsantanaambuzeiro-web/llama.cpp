@@ -3,6 +3,7 @@ name: Build llama.cpp for iOS
 on:
   push:
     branches: ["main"]
+
   workflow_dispatch:
 
 jobs:
@@ -17,20 +18,22 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
-      - name: Show environment
+      - name: Configure tools
         run: |
+          brew install cmake
+
           xcodebuild -version
           cmake --version
+          swift --version
+
+          echo "Logical CPUs:"
           sysctl -n hw.logicalcpu
 
       - name: Configure CMake
         run: |
-          cmake -S . -B build \
-            -G Xcode \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="" \
+          mkdir -p build
+
+          cmake -S . -B build -G Xcode \
             -DGGML_METAL=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_OPENSSL=OFF \
@@ -38,9 +41,29 @@ jobs:
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
-            -DLLAMA_BUILD_SERVER=OFF
+            -DLLAMA_BUILD_SERVER=OFF \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml \
+            --DBUILD_SHARED_LIBS=OFF
 
-      - name: Build
+      - name: Show configured targets
+        run: |
+          echo "=== CMake cache ==="
+          grep -E \
+            'LLAMA_BUILD|GGML_METAL|CMAKE_OSX|CMAKE_SYSTEM_NAME' \
+            build/CMakeCache.txt \
+            | sort
+
+          echo
+          echo "=== Xcode targets ==="
+
+          xcodebuild \
+            -project build/llama.cpp.xcodeproj \
+            -list || true
+
+      - name: Build llama.cpp
         run: |
           cmake --build build \
             --config Release \
@@ -49,13 +72,12 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
 
-      - name: Collect llama.cpp SDK
+      - name: Inspect complete build
         run: |
-          rm -rf llama-ios-sdk
-          mkdir -p llama-ios-sdk/lib
-          mkdir -p llama-ios-sdk/include
+          echo "============================================"
+          echo "ALL STATIC LIBRARIES"
+          echo "============================================"
 
-          echo "=== Static libraries ==="
           find build \
             -type f \
             -name "*.a" \
@@ -63,48 +85,127 @@ jobs:
             | sort
 
           echo
-          echo "=== Headers ==="
-          find include \
+          echo "============================================"
+          echo "LLAMA LIBRARY"
+          echo "============================================"
+
+          find build \
             -type f \
-            \( -name "*.h" -o -name "*.hpp" \) \
+            -name "libllama.a" \
+            -print
+
+          echo
+          echo "============================================"
+          echo "GGML LIBRARIES"
+          echo "============================================"
+
+          find build \
+            -type f \
+            -name "libggml*.a" \
             -print \
             | sort
 
           echo
-          echo "=== Copy libraries ==="
+          echo "============================================"
+          echo "OTHER BUILD OUTPUT"
+          echo "============================================"
+
+          find build/Release \
+            -maxdepth 3 \
+            -type f \
+            2>/dev/null \
+            | sort || true
+
+      - name: Verify llama.cpp output
+        run: |
+          LLAMA_LIB=$(find build \
+            -type f \
+            -name "libllama.a" \
+            -print -quit)
+
+          if [ -z "$LLAMA_LIB" ]; then
+            echo "ERROR: libllama.a was not generated."
+            echo
+            echo "The complete list of .a files is:"
+            find build \
+              -type f \
+              -name "*.a" \
+              -print \
+              | sort
+
+            exit 1
+          fi
+
+          echo "libllama.a:"
+          echo "$LLAMA_LIB"
+
+          echo
+          echo "Architecture:"
+          lipo -info "$LLAMA_LIB"
+
+      - name: Collect llama.cpp SDK
+        run: |
+          rm -rf llama-ios-sdk
+
+          mkdir -p llama-ios-sdk/lib
+          mkdir -p llama-ios-sdk/include
+
+          echo "=== Copying every static library ==="
+
           find build \
             -type f \
             -name "*.a" \
             -exec cp {} llama-ios-sdk/lib/ \;
 
           echo
-          echo "=== Copy headers ==="
-          cp -R include/* llama-ios-sdk/include/
+          echo "=== Copying public llama headers ==="
+
+          cp include/llama.h \
+             llama-ios-sdk/include/
+
+          cp include/llama-cpp.h \
+             llama-ios-sdk/include/
 
           echo
-          echo "=== SDK ==="
+          echo "=== SDK contents ==="
+
           find llama-ios-sdk \
-            -maxdepth 3 \
             -type f \
             -print \
             | sort
 
-      - name: Verify architecture
+      - name: Verify SDK architectures
         run: |
-          echo "=== Library architectures ==="
+          echo "============================================"
+          echo "FINAL LIBRARIES"
+          echo "============================================"
 
           for lib in llama-ios-sdk/lib/*.a; do
             echo
-            echo ">>> $lib"
+            echo ">>> $(basename "$lib")"
+            file "$lib"
             lipo -info "$lib"
           done
 
+          echo
+          echo "============================================"
+          echo "HEADERS"
+          echo "============================================"
+
+          ls -lh llama-ios-sdk/include/
+
       - name: Create SDK archive
         run: |
-          tar -czf llama-ios-sdk-arm64.tar.gz llama-ios-sdk
+          tar \
+            -czf \
+            llama-ios-sdk-arm64.tar.gz \
+            llama-ios-sdk
 
           echo
-          echo "=== Artifact ==="
+          echo "============================================"
+          echo "FINAL ARTIFACT"
+          echo "============================================"
+
           ls -lh llama-ios-sdk-arm64.tar.gz
 
       - name: Upload llama.cpp iOS SDK
