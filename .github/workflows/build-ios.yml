@@ -1,50 +1,115 @@
-name: Build llama.cpp for iOS (Xcode Native Architecture)
+name: Build llama.cpp for iOS
 
 on:
   push:
-    branches: [ "main" ]
-  workflow_dispatch: 
+    branches: ["main"]
+  workflow_dispatch:
 
 jobs:
   build-llama-ios:
     runs-on: macos-latest
 
     steps:
-    - name: Checkout do llama.cpp
-      uses: actions/checkout@v4
-      with:
-        repository: ggerganov/llama.cpp
-        submodules: recursive
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          submodules: recursive
+          fetch-depth: 1
 
-    - name: Configurar ferramentas
-      run: |
-        brew install cmake
+      - name: Show environment
+        run: |
+          xcodebuild -version
+          cmake --version
+          sysctl -n hw.logicalcpu
 
-    - name: Build do Motor llama.cpp (Padrão Xcode)
-      id: cmake_build
-      run: |
-        sysctl -a
-        mkdir build
-        # Usamos exatamente a sua estrutura de configuração nativa para iOS
-        cmake -B build -G Xcode \
-          -DGGML_METAL_EMBED_LIBRARY=ON \
-          -DLLAMA_OPENSSL=OFF \
-          -DLLAMA_BUILD_APP=OFF \
-          -DLLAMA_BUILD_EXAMPLES=OFF \
-          -DLLAMA_BUILD_TOOLS=OFF \
-          -DLLAMA_BUILD_TESTS=OFF \
-          -DLLAMA_BUILD_SERVER=OFF \
-          -DCMAKE_SYSTEM_NAME=iOS \
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-          -DCMAKE_OSX_ARCHITECTURES=arm64 \
-          -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
-          
-        # Compila aproveitando o máximo de CPUs lógicas da máquina virtual
-        cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build \
+            -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="" \
+            -DGGML_METAL=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DLLAMA_OPENSSL=OFF \
+            -DLLAMA_BUILD_APP=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_SERVER=OFF
 
-    - name: Upload dos Artefatos Estáticos para o Xcode
-      uses: actions/upload-artifact@v4
-      with:
-        name: llama-engine-ios-arm64
-        path: |
-          build/**/*.a
+      - name: Build
+        run: |
+          cmake --build build \
+            --config Release \
+            -j"$(sysctl -n hw.logicalcpu)" \
+            -- \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Collect llama.cpp SDK
+        run: |
+          rm -rf llama-ios-sdk
+          mkdir -p llama-ios-sdk/lib
+          mkdir -p llama-ios-sdk/include
+
+          echo "=== Static libraries ==="
+          find build \
+            -type f \
+            -name "*.a" \
+            -print \
+            | sort
+
+          echo
+          echo "=== Headers ==="
+          find include \
+            -type f \
+            \( -name "*.h" -o -name "*.hpp" \) \
+            -print \
+            | sort
+
+          echo
+          echo "=== Copy libraries ==="
+          find build \
+            -type f \
+            -name "*.a" \
+            -exec cp {} llama-ios-sdk/lib/ \;
+
+          echo
+          echo "=== Copy headers ==="
+          cp -R include/* llama-ios-sdk/include/
+
+          echo
+          echo "=== SDK ==="
+          find llama-ios-sdk \
+            -maxdepth 3 \
+            -type f \
+            -print \
+            | sort
+
+      - name: Verify architecture
+        run: |
+          echo "=== Library architectures ==="
+
+          for lib in llama-ios-sdk/lib/*.a; do
+            echo
+            echo ">>> $lib"
+            lipo -info "$lib"
+          done
+
+      - name: Create SDK archive
+        run: |
+          tar -czf llama-ios-sdk-arm64.tar.gz llama-ios-sdk
+
+          echo
+          echo "=== Artifact ==="
+          ls -lh llama-ios-sdk-arm64.tar.gz
+
+      - name: Upload llama.cpp iOS SDK
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-ios-sdk-arm64
+          path: llama-ios-sdk-arm64.tar.gz
+          if-no-files-found: error
